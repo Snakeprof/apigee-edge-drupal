@@ -118,6 +118,12 @@ class TeamForm extends FieldableEdgeEntityForm implements EdgeEntityFormInterfac
     /** @var \Drupal\apigee_edge_teams\Entity\TeamInterface $team */
     $team = $this->entity;
 
+	$teamRoleStorage = $this->entityTypeManager->getStorage('team_role');
+	$role_options = array_reduce($teamRoleStorage->loadMultiple(), function (array $carry, TeamRoleInterface $role) {
+			$carry[$role->id()] = $role->label();
+			return $carry;
+		}, []);
+		
     $form['name'] = [
       '#title' => $this->t('Internal name'),
       '#type' => 'machine_name',
@@ -128,6 +134,30 @@ class TeamForm extends FieldableEdgeEntityForm implements EdgeEntityFormInterfac
       ],
       '#disabled' => !$team->isNew(),
       '#default_value' => $team->id(),
+    ];
+    $form['add_me_member'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Add me as team member'),
+	  '#description' => $this->t('If checked you will be added as a Team member.'),
+	  '#default_value' => 0,
+      '#multiple' => false,
+      '#required' => FALSE,
+    ];
+    $form['team_roles'] = [
+      '#type' => 'checkboxes',
+      '#title' => $this->t('Role'),
+	  '#description' => $this->t('If checked, you will be added as a Team administrator.'),
+      '#options' => $role_options,
+	  '#states' => array(
+			"visible" => array("input[name='add_me_member']" => array("checked" => TRUE)),
+		),		
+      '#multiple' => TRUE,
+      '#required' => FALSE,
+    ];	
+    $form['team_roles'][TeamRoleInterface::TEAM_MEMBER_ROLE] = [
+      '#default_value' => TRUE,
+      '#disabled' => TRUE,
+	  '#access' => FALSE,
     ];
 
     return $form;
@@ -187,15 +217,18 @@ class TeamForm extends FieldableEdgeEntityForm implements EdgeEntityFormInterfac
     $team = $this->entity;
     $was_new = $team->isNew();
     $result = parent::save($form, $form_state);
+	$add_me_member = $form_state->getValue('add_me_member');
 
-    if ($was_new) {
+    if ($was_new && $add_me_member) {
       try {
         $this->teamMembershipManager->addMembers($team->id(), [$this->currentUser->getEmail()]);
 
         try {
+          $selected_roles = array_filter($form_state->getValue('team_roles', []), function ($role) { return $role && $role != TeamRoleInterface::TEAM_MEMBER_ROLE;});
+		  
           /** @var \Drupal\apigee_edge_teams\Entity\Storage\TeamMemberRoleStorageInterface $team_member_role_storage */
           $team_member_role_storage = $this->entityTypeManager->getStorage('team_member_role');
-          $team_member_role_storage->addTeamRoles($this->currentUser(), $team, [TeamRoleInterface::TEAM_ADMIN_ROLE]);
+		  $team_member_role_storage->addTeamRoles($this->currentUser(), $team, $selected_roles);
         }
         catch (\Exception $exception) {
           $admin_role = $this->entityTypeManager->getStorage('team_role')->load(TeamRoleInterface::TEAM_ADMIN_ROLE);
